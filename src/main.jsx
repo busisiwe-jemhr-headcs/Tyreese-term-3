@@ -1,6 +1,7 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {createClient} from '@supabase/supabase-js';
+import {TEST_SUBJECTS, TEST_BANK} from './testsData.js';
 import './styles.css';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
@@ -106,9 +107,9 @@ const QUESTIONS = {
 };
 
 const storageKey='tyreese-quest-state-v1';
-const defaultState={player:{name:'Tyreese',handle:'TYR3ESE',xp:0,level:1,streak:0},sessions:[],subjectStats:{}};
+const defaultState={player:{name:'Tyreese',handle:'TYR3ESE',xp:0,level:1,streak:0},sessions:[],subjectStats:{},testSessions:[]};
 
-function loadLocal(){try{return JSON.parse(localStorage.getItem(storageKey))||defaultState}catch{return defaultState}}
+function loadLocal(){try{return {...defaultState, ...(JSON.parse(localStorage.getItem(storageKey))||{})}}catch{return defaultState}}
 function saveLocal(s){localStorage.setItem(storageKey,JSON.stringify(s))}
 function avatarSvg(){
  return `<svg viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
@@ -141,6 +142,10 @@ function App(){
  const [parentMode,setParentMode]=useState(false);
  const [parentPin,setParentPin]=useState('');
  const [notice,setNotice]=useState('');
+ const [testSubject,setTestSubject]=useState(null);
+ const [testIndex,setTestIndex]=useState(0);
+ const [testAnswers,setTestAnswers]=useState([]);
+ const [testMarks,setTestMarks]=useState([]);
 
  useEffect(()=>{saveLocal(state)},[state]);
  useEffect(()=>{
@@ -194,14 +199,44 @@ function App(){
  };
  const reset=()=>{localStorage.removeItem(storageKey); location.reload()};
 
+ const currentTestQs=testSubject?TEST_BANK[testSubject.id]:[];
+ const startTest=(s)=>{
+   setTestSubject(s); setTestIndex(0);
+   setTestAnswers(Array(TEST_BANK[s.id].length).fill(''));
+   setTestMarks(Array(TEST_BANK[s.id].length).fill(null));
+   setView('testRun');
+ };
+ const setTestAnswer=(text)=>{
+   const next=[...testAnswers]; next[testIndex]=text; setTestAnswers(next);
+ };
+ const testNext=()=>{ if(testIndex<currentTestQs.length-1) setTestIndex(testIndex+1); else setView('testReview') };
+ const testPrev=()=>{ if(testIndex>0) setTestIndex(testIndex-1) };
+ const markTestAnswer=(i,correct)=>{ const next=[...testMarks]; next[i]=correct; setTestMarks(next) };
+ const saveTestSession=async()=>{
+   const score=testMarks.filter(m=>m===true).length;
+   const total=currentTestQs.length;
+   const session={id:Date.now(),subject:testSubject.id,subjectName:testSubject.name,score,total,date:new Date().toISOString()};
+   const next={...state,testSessions:[...(state.testSessions||[]),session]};
+   await sync(next);
+   setTestSubject(null); setTestAnswers([]); setTestMarks([]); setTestIndex(0);
+   setView('tests');
+ };
+ const backToTestsHub=()=>{ setTestSubject(null); setTestAnswers([]); setTestMarks([]); setTestIndex(0); setView('tests') };
+
  if(parentMode){
    return <ParentDashboard state={state} overall={overall} avgBySubject={avgBySubject} onBack={()=>setParentMode(false)} reset={reset}/>;
  }
  if(view==='quest'&&subject){
    return <Quest subject={subject} q={currentQ} index={questionIndex} total={currentQs.length} answer={answers[questionIndex]} choose={choose} next={nextQuestion} finished={finished} answers={answers} onHome={()=>{setView('home');setSubject(null)}} xp={state.player.xp} notice={notice}/>;
  }
+ if(view==='testRun'&&testSubject){
+   return <TestRunner subject={testSubject} q={currentTestQs[testIndex]} index={testIndex} total={currentTestQs.length} value={testAnswers[testIndex]||''} onChange={setTestAnswer} onNext={testNext} onPrev={testPrev} onHome={backToTestsHub}/>;
+ }
+ if(view==='testReview'&&testSubject){
+   return <TestReview subject={testSubject} questions={currentTestQs} answers={testAnswers} marks={testMarks} onMark={markTestAnswer} onSave={saveTestSession} onHome={backToTestsHub}/>;
+ }
  return <div className="app">
-   <Header state={state} onParent={()=>setParentMode(true)}/>
+   <Header state={state} onParent={()=>setParentMode(true)} onTests={()=>setView('tests')}/>
    <main className="container">
     {view==='home' && <>
       <section className="hero">
@@ -225,12 +260,13 @@ function App(){
         <div><b>🏆 Master</b><span>80% is the mission target — 90% is elite.</span></div>
       </section>
     </>}
+    {view==='tests' && <TestsHub subjects={TEST_SUBJECTS} sessions={state.testSessions||[]} onStart={startTest} onBack={()=>setView('home')}/>}
    </main>
    <footer>Built for Tyreese • CAPS-aligned study structure • Family-first progress tracking</footer>
  </div>
 }
 
-function Header({state,onParent}){return <header><div className="brand"><span className="logo">⚡</span><div><b>TYR3ESE</b><small>QUEST HQ</small></div></div><div className="headerRight"><div className="miniLevel">LVL {state.player.level} <span>{state.player.xp} XP</span></div><button className="parentBtn" onClick={onParent}>👀 Parent HQ</button></div></header>}
+function Header({state,onParent,onTests}){return <header><div className="brand"><span className="logo">⚡</span><div><b>TYR3ESE</b><small>QUEST HQ</small></div></div><div className="headerRight"><div className="miniLevel">LVL {state.player.level} <span>{state.player.xp} XP</span></div>{onTests&&<button className="parentBtn" onClick={onTests}>📝 Tests</button>}<button className="parentBtn" onClick={onParent}>👀 Parent HQ</button></div></header>}
 
 function SubjectCard({s,mastery,onClick}){
  return <button className={`subject ${s.color}`} onClick={onClick}><div className="subjectTop"><span className="subjectIcon">{s.icon}</span><span className="arrow">↗</span></div><h3>{s.name}</h3><p>{s.tagline}</p><div className="progress"><span style={{width:`${mastery}%`}}/></div><div className="subjectBottom"><span>{mastery?`${mastery}% mastery`:'Not started'}</span><span>{s.topics.length} skills</span></div></button>
@@ -265,6 +301,68 @@ function ParentDashboard({state,overall,avgBySubject,onBack,reset}){
  <div className="parentGrid"><div className="panel"><h2>What you can do tonight</h2><ol><li>Ask Tyreese to teach you one thing he learned — no notes.</li><li>Ask “How do you know?” after an answer, not just “What is the answer?”</li><li>Keep sessions to 30–60 minutes and stop while he still has energy.</li><li>Celebrate improvement and explanation quality, not only marks.</li></ol></div><div className="panel"><h2>Recent drops</h2>{recent.length?<div className="recent">{recent.map(x=><div key={x.id}><span>{SUBJECTS.find(s=>s.id===x.subject)?.icon} {SUBJECTS.find(s=>s.id===x.subject)?.name}</span><b>{pct(x.score,x.total)}%</b><small>+{x.xp} XP</small></div>)}</div>:<p className="muted">No quests completed yet.</p>}</div></div>
  <div className="syncNote">{supabaseConfigured()? '☁️ Cross-device sync is configured.':'💾 Local mode is active. Add Supabase environment variables to sync between laptops.'}</div>
  </main></div>
+}
+
+function TestsHub({subjects,sessions,onStart,onBack}){
+ const lastFor=(id)=>{const list=sessions.filter(s=>s.subject===id);return list.length?list[list.length-1]:null};
+ return <section className="tracks testsHub">
+  <div className="sectionHead"><div><div className="eyebrow">WRITE IT OUT</div><h2>Tests</h2></div><span className="pill">30 QUESTIONS • SELF-MARKED</span></div>
+  <p className="testsIntro">Answer each question by writing your own response — no multiple choice. When you're done, compare your answers to the memo and mark yourself (or ask a parent to check).</p>
+  <div className="grid">
+   {subjects.map(s=>{const last=lastFor(s.id);return <button key={s.id} className={`subject ${s.color}`} onClick={()=>onStart(s)}>
+     <div className="subjectTop"><span className="subjectIcon">{s.icon}</span><span className="arrow">↗</span></div>
+     <h3>{s.name} Test</h3>
+     <p>30 written-response questions, marked against a memo.</p>
+     <div className="subjectBottom"><span>{last?`Last: ${pct(last.score,last.total)}%`:'Not attempted yet'}</span><span>30 Qs</span></div>
+   </button>})}
+  </div>
+  {sessions.length>0 && <div className="panel testsHistory"><h2>Recent test attempts</h2>{[...sessions].reverse().slice(0,6).map(s=><div key={s.id} className="testsHistoryRow"><span>{s.subjectName}</span><b>{s.score}/{s.total}</b><small>{new Date(s.date).toLocaleDateString()}</small></div>)}</div>}
+  <button className="ghost" onClick={onBack} style={{marginTop:20}}>← Back to HQ</button>
+ </section>
+}
+
+function TestRunner({subject,q,index,total,value,onChange,onNext,onPrev,onHome}){
+ return <div className="questPage">
+  <header><button className="back" onClick={onHome}>← Tests</button><div className="brand"><span className="logo">📝</span><div><b>{subject.name.toUpperCase()} TEST</b><small>WRITTEN RESPONSE</small></div></div><div className="miniLevel">Q {index+1}/{total}</div></header>
+  <main className="questContainer">
+   <div className="questMeta"><span className="pill">{subject.icon} {subject.name}</span><span>Question {index+1}/{total}</span></div>
+   <div className="bar"><span style={{width:`${(index/total)*100}%`}}/></div>
+   <div className="questionCard">
+    <div className="eyebrow">WRITE YOUR ANSWER</div>
+    <h1 className="testQ">{q.q}</h1>
+    <textarea className="testAnswerBox" rows={4} placeholder="Write your answer here…" value={value} onChange={e=>onChange(e.target.value)}/>
+    <div className="testNavRow">
+     <button className="ghost" onClick={onPrev} disabled={index===0}>← Back</button>
+     <button className="primary" onClick={onNext}>{index===total-1?'Finish & Review →':'Next Question →'}</button>
+    </div>
+   </div>
+  </main>
+ </div>
+}
+
+function TestReview({subject,questions,answers,marks,onMark,onSave,onHome}){
+ const scored=marks.filter(m=>m!==null).length;
+ const correct=marks.filter(m=>m===true).length;
+ return <div className="questPage">
+  <header><button className="back" onClick={onHome}>← Tests</button><div className="brand"><span className="logo">✅</span><div><b>{subject.name.toUpperCase()} TEST</b><small>MARK YOUR ANSWERS</small></div></div><div className="miniLevel">{correct}/{questions.length} marked correct</div></header>
+  <main className="questContainer reviewContainer">
+   <p className="testsIntro">Compare each answer to the memo, then mark it ✓ correct or ✗ incorrect. {scored<questions.length && <b> {questions.length-scored} question(s) not yet marked.</b>}</p>
+   {questions.map((q,i)=>(
+    <div key={i} className="reviewCard">
+     <div className="eyebrow">QUESTION {i+1}</div>
+     <p className="reviewQ">{q.q}</p>
+     <div className="reviewAnswerBlock"><b>Tyreese's answer:</b><p className="reviewYourAns">{answers[i]?.trim()?answers[i]:<i>(left blank)</i>}</p></div>
+     <div className="reviewAnswerBlock memo"><b>Memo:</b><p>{q.memo}</p></div>
+     <div className="reviewMarkRow">
+      <button className={`markBtn ${marks[i]===true?'good':''}`} onClick={()=>onMark(i,true)}>✓ Correct</button>
+      <button className={`markBtn ${marks[i]===false?'bad':''}`} onClick={()=>onMark(i,false)}>✗ Incorrect</button>
+     </div>
+    </div>
+   ))}
+   <button className="primary big" onClick={onSave} disabled={scored<questions.length}>Save Result ({correct}/{questions.length})</button>
+   {scored<questions.length && <p className="muted" style={{textAlign:'center',marginTop:10}}>Mark every question before saving.</p>}
+  </main>
+ </div>
 }
 
 function supabaseConfigured(){return !!(SUPABASE_URL&&SUPABASE_KEY)}
